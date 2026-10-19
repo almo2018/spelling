@@ -678,6 +678,28 @@
     .clue-assoc .swatch-big{width:88px;height:88px;border-radius:22px;}
   }
   .emo-img{display:inline-block;height:1em;width:1em;vertical-align:-0.125em;object-fit:contain;}
+  /* ---------- 答錯時：標出對／錯的字母，以及「正確拼法」卡 ---------- */
+  .blank.ok-flash{background:#c8f5dc;border-bottom-color:var(--emerald-dark);}
+  .blank.reveal-ok{background:#fff3d6;}
+  .blank.reveal{background:#ffd3d0;border-bottom-color:var(--ruby-dark);color:#a83c35;}
+  .answer-card{background:linear-gradient(180deg,var(--parchment),var(--parchment-dark));color:var(--ink);border:3px solid var(--gold-dark);
+    border-radius:16px;padding:14px;text-align:center;margin-top:8px;}
+  .ac-label{font-size:13px;font-weight:800;color:#6b4b12;}
+  .ac-word{font-size:40px;font-weight:900;letter-spacing:4px;margin:4px 0;color:#3b2f1e;}
+  .ac-word .ac-hit{color:#d0342c;text-decoration:underline;text-decoration-thickness:3px;text-underline-offset:6px;}
+  .ac-yours{font-size:14px;color:#6b5636;}
+  .ac-typed{font-weight:900;letter-spacing:2px;}
+  .ac-typed .ac-miss{color:#d0342c;text-decoration:line-through;}
+  .ac-zh{font-size:18px;font-weight:800;margin:6px 0 10px;}
+  .ac-btns{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:10px;}
+  .ac-next{width:100%;}
+  @media (min-width:700px){
+    .answer-card{padding:20px;}
+    .ac-label{font-size:16px;}
+    .ac-word{font-size:56px;letter-spacing:6px;}
+    .ac-yours{font-size:17px;}
+    .ac-zh{font-size:22px;}
+  }
 </style>
 </head>
 <body>
@@ -4651,6 +4673,7 @@ function nextWord(){
   state.currentAttempt = [];
   state.usedTileIdx = [];
   state.attemptsThisWord = 0;
+  state.awaitingNext = false;
   state.clueMode = w.mode ? w.mode : (Math.random()<0.5 ? 'image':'meaning');
   state.scrambled = shuffle(w.word.split(''));
   state.monsterHP = 100;
@@ -4715,7 +4738,8 @@ function renderBattle(){
       <div class="battle-right">
       <div class="blanks" id="blanks-box">${blanks}</div>
       <div class="tiles" id="tiles-box">${tiles}</div>
-      <div class="action-row">
+      <div id="answer-box"></div>
+      <div class="action-row" id="battle-actions">
         <button class="btn secondary small" onclick="undoTile()">⬅ 清除</button>
         <button class="btn secondary small" onclick="hintLetter()">💡 提示</button>
         <button class="btn secondary small" onclick="quitSession()">⏸ 暫停離開</button>
@@ -4777,7 +4801,7 @@ function syncBattleTiles(){
     if(!b) continue;
     const ch = state.currentAttempt[i];
     b.textContent = ch ? ch.toUpperCase() : '';
-    b.classList.remove('wrong-flash'); b.classList.remove('reveal');
+    b.classList.remove('wrong-flash'); b.classList.remove('reveal'); b.classList.remove('ok-flash');
   }
   state.scrambled.forEach((ch,i)=>{
     const t = document.getElementById('tile-'+i);
@@ -4833,23 +4857,61 @@ function checkAnswer(){
   } else {
     state.sessionMistakes++;
     state.usedTileIdx.forEach(i=> document.getElementById('tile-'+i)?.classList.add('wrong-shake'));
-    for(let i=0;i<w.word.length;i++) document.getElementById('blank-'+i)?.classList.add('wrong-flash');
+    // 標出哪幾個字母位置對（綠）、哪幾個錯（紅），讓孩子知道錯在哪裡
+    for(let i=0;i<w.word.length;i++) document.getElementById('blank-'+i)?.classList.add(state.currentAttempt[i]===w.word[i] ? 'ok-flash' : 'wrong-flash');
     logMistake(w.word, typed);
     if(state.attemptsThisWord < 3){
-      if(fb){ fb.className='feedback bad'; fb.textContent=`不對唷，再試一次！(${state.attemptsThisWord}/3)`; }
-      setTimeout(()=>{ state.currentAttempt=[]; state.usedTileIdx=[]; syncBattleTiles(); }, 700);
+      const nWrong = [...w.word].filter((c,i)=>state.currentAttempt[i]!==c).length;
+      if(fb){ fb.className='feedback bad'; fb.textContent=`有 ${nWrong} 個字母不對（紅色格子），再試一次！(${state.attemptsThisWord}/3)`; }
+      setTimeout(()=>{ state.currentAttempt=[]; state.usedTileIdx=[]; syncBattleTiles(); }, 1400);
     } else {
-      if(fb){ fb.className='feedback bad'; fb.textContent=`正確答案是：${w.word.toUpperCase()}`; }
-      for(let i=0;i<w.word.length;i++){
-        const b=document.getElementById('blank-'+i);
-        if(b){ b.classList.add('reveal'); b.textContent=w.word[i].toUpperCase(); }
-      }
-      speakWord(w.word);
-      setTimeout(()=>{ commitWordResult(w, false); nextWord(); }, 1600);
+      // 第三次還是錯：停在「正確拼法」畫面，等孩子看清楚、聽過，按「下一題」才繼續（不自動跳題）
+      commitWordResult(w, false);
+      showAnswerCard(w, typed);
     }
   }
 }
 
+// 答錯三次後的「正確拼法」卡：紅色標出拼錯的字母，可以再聽、聽字母拼讀，按「記住了」才進下一題
+function showAnswerCard(w, typed){
+  state.awaitingNext = true;
+  const fb = document.getElementById('feedback');
+  if(fb){ fb.className = 'feedback'; fb.textContent = ''; }
+  for(let i=0;i<w.word.length;i++){
+    const b = document.getElementById('blank-'+i);
+    if(!b) continue;
+    b.classList.remove('wrong-flash'); b.classList.remove('ok-flash');
+    b.classList.add(typed[i]===w.word[i] ? 'reveal-ok' : 'reveal');
+    b.textContent = w.word[i].toUpperCase();
+  }
+  const tiles = document.getElementById('tiles-box'), acts = document.getElementById('battle-actions'), box = document.getElementById('answer-box');
+  if(tiles) tiles.style.display = 'none';
+  if(acts) acts.style.display = 'none';
+  const right = [...w.word].map((c,i)=>`<span class="${typed[i]===c?'':'ac-hit'}">${esc(c.toUpperCase())}</span>`).join('');
+  const yours = [...typed].map((c,i)=>`<span class="${w.word[i]===c?'':'ac-miss'}">${esc(c.toUpperCase())}</span>`).join('');
+  if(box) box.innerHTML = `
+    <div class="answer-card">
+      <div class="ac-label">✏️ 正確拼法（紅色是要特別記住的字母）</div>
+      <div class="ac-word">${right}</div>
+      <div class="ac-yours">你剛才拼的：<span class="ac-typed">${yours}</span></div>
+      <div class="ac-zh">${wordVisual(w)} ${esc(w.zh)}</div>
+      <div class="ac-btns">
+        <button class="sound-btn" onclick="speakWord(state.currentWord.word)">🔊 再聽一次</button>
+        <button class="sound-btn" onclick="spellOut()">🔤 一個一個字母念</button>
+      </div>
+      <button class="btn green ac-next" onclick="answerNext()">記住了，下一題 ▶</button>
+    </div>`;
+  speakWord(w.word);
+}
+function spellOut(){
+  const w = state.currentWord;
+  if(w) speakOut(w.word.toUpperCase().split('').filter(c=>c!=='-').join(', ') + '. ' + w.word, 0.8);
+}
+function answerNext(){
+  if(!state.awaitingNext) return;
+  state.awaitingNext = false;
+  nextWord();
+}
 function logMistake(correct, typed){
   DATA.mistakeLog = DATA.mistakeLog || [];
   DATA.mistakeLog.push({correct, typed, date:todayStr()});
@@ -5631,6 +5693,8 @@ function onGlobalKey(e){
   const t = e.target;
   if(t && t.tagName && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
   if(state.screen!=='battle') return;
+  // 正確拼法卡顯示中：按 Enter 或空白鍵進下一題，其他按鍵先不動作
+  if(state.awaitingNext){ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); answerNext(); } return; }
   if(e.key==='Backspace'){ e.preventDefault(); undoTile(); return; }
   if(e.key && e.key.length===1 && /[a-zA-Z-]/.test(e.key)){ e.preventDefault(); typeLetter(e.key.toLowerCase()); }
 }
